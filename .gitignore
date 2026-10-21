@@ -1,0 +1,11 @@
+# Materiais pessoais (imagens, vídeos, músicas, logo e registro de licenças)
+Biblioteca/
+# Quadros de teste com gravações pessoais
+testes-verificados/
+# Código original de referência (não usado na compilação)
+codigo-fonte/legado/
+# Projetos e exportações
+*.cortaproject/
+*.mp4
+*.mov
+.DS_Store
