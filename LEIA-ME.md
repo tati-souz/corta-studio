@@ -1,4 +1,4 @@
-# Corta Studio — Projeto Ethos (versão 0.14.3)
+# Corta Studio — Projeto Ethos (versão 0.15.0)
 
 Editor de vídeo para Mac (Apple Silicon). Você marca o que quer, clica em **Editar com IA** e o Claude monta a edição. Depois você refina conversando no **chat**, salva o projeto e exporta. A IA usa a **sua assinatura Claude** (não há cobrança por API).
 
@@ -141,6 +141,9 @@ Botão **Imagens e vídeos** na barra da linha do tempo, ou **Imagens e vídeos 
 - **Pasta do computador:** escolha qualquer pasta (subpastas também entram). O Mac reconhece o conteúdo de cada imagem e vídeo, sem internet, e o Claude escolhe pelo conteúdo, então nomes como IMG_0412 funcionam. Os arquivos usados são copiados para a Biblioteca.
 - **Biblioteca:** as imagens e vídeos de `Corta Studio/Biblioteca`.
 - **Fotos da internet:** fotos e pinturas de licença livre (Openverse e Wikimedia Commons), no estilo Ethos.
+- **Google / Pinterest (escolha manual)**: na janela "Imagem para a narração" (botão direito ▸ Imagem para a narração aqui), a primeira aba abre o Google Imagens ou o Pinterest dentro da própria janela, com a busca sugerida pelo Claude. Clique numa imagem para abri-la grande e **arraste-a para "Solte aqui"**, ou clique com o botão direito ▸ Copiar imagem ▸ **Colar (⌘V)**. A imagem vai para a Biblioteca, e o endereço de origem fica em `fontes.txt`.
+  - O filtro "Só com licença Creative Commons" do Google vem ligado. Mesmo assim, imagens do Google e do Pinterest costumam ter dono: confira a licença na página antes de publicar.
+  - O Pinterest só mostra a busca para quem está logado. Entre na sua conta uma vez dentro da janela, e o login fica guardado.
 - **Vídeos da internet:** vídeos curtos do **Pexels** (Full HD, licença livre para uso comercial, sem obrigação de crédito). É preciso uma **chave gratuita**: crie uma conta em pexels.com, abra pexels.com/api, clique em "Your API Key" e cole na janela. A chave fica guardada nas Chaves do macOS. Só os segundos usados são baixados.
 - **Ilustrações do Claude:** uma por momento, no estilo Ethos.
 

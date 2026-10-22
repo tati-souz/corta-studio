@@ -19,8 +19,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Corta Studio</string>
 <key>CFBundleDisplayName</key><string>Corta Studio</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.14.3</string>
-<key>CFBundleVersion</key><string>24</string>
+<key>CFBundleShortVersionString</key><string>0.15.0</string>
+<key>CFBundleVersion</key><string>25</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSSpeechRecognitionUsageDescription</key><string>O Corta Studio transcreve a fala dos vídeos escolhidos por você para criar legendas.</string>

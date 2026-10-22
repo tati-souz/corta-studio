@@ -673,6 +673,13 @@ struct StudioView: View {
             }
             exit(0)
         }
+        if let k = args.firstIndex(of: "--web-image-test"), args.count > k + 1 {
+            // Abre a busca de imagem na aba Google/Pinterest com uma busca pronta (para conferir a página dentro da janela).
+            studio.imageRequest = ImageRequest(start: 1, end: 4, narration: "Você pode estudar muito sobre casamento")
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            NotificationCenter.default.post(name: .init("CortaWebImageTest"), object: args[k + 1])
+            try? await Task.sleep(nanoseconds: 9_000_000_000)
+        }
         if args.contains("--tap-test") {
             studio.effects = [Effect(kind: .texto, start: 2, end: 12, text: "O hábito forma o caráter", style: "destaque"),
                               Effect(kind: .texto, start: 2, end: 12, text: "Primeiro: a correção", style: "capitulo")]
