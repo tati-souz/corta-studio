@@ -239,6 +239,11 @@ struct ReelsPanel: View {
                     }
                     Picker("Animação", selection: $studio.settings.captionMode) { Text("Palavra a palavra").tag("Dinâmica"); Text("Uma palavra por vez").tag("Uma palavra"); Text("Frase inteira").tag("Blocos") }
                     Picker("Posição", selection: $studio.settings.captionPosition) { Text("Inferior").tag("Inferior"); Text("Centro").tag("Centro") }
+                    HStack {
+                        Text("Aproximação do rosto").font(.caption)
+                        Slider(value: $studio.settings.frameScale, in: 0.5...1)
+                        Text(studio.settings.frameScale > 0.99 ? "justa" : "mais aberta").font(.caption2).foregroundStyle(.secondary)
+                    }.help("Vídeo horizontal virando vertical: mais aberto mostra mais de você e do ambiente, com fundo desfocado em cima e embaixo.")
                     Picker("Fonte", selection: $studio.settings.captionFont) { ForEach(EditSettings.captionFonts, id: \.id) { Text($0.name).tag($0.id) } }
                     Picker("Cor", selection: $studio.settings.captionColor) { ForEach(EditSettings.captionColors, id: \.id) { Text($0.name).tag($0.id) } }
                     HStack { Text("Tamanho").font(.caption); Slider(value: $studio.settings.captionScale, in: 0.6...1.6); Text("\(Int(studio.settings.captionScale * 100))%").font(.caption.monospacedDigit()) }

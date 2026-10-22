@@ -72,8 +72,8 @@ struct PreviewTapLayer: View {
             let w = frame.width * scale, h = frame.height * scale
             let origin = CGPoint(x: (g.size.width - w) / 2, y: (g.size.height - h) / 2)
             let rect: (CGRect) -> CGRect = { r in CGRect(x: origin.x + r.minX * w, y: origin.y + r.minY * h, width: r.width * w, height: r.height * h) }
+            // Só as caixas de texto recebem cliques; o resto passa para o player (play, barra de tempo, volume).
             ZStack(alignment: .topLeading) {
-                Color.clear.contentShape(Rectangle())
                 ForEach(Array(boxes.enumerated()), id: \.offset) { _, item in
                     let selected: Bool = {
                         switch item.target {
@@ -82,25 +82,22 @@ struct PreviewTapLayer: View {
                         case .question: return false
                         }
                     }()
-                    let r = rect(item.box)
-                    if selected || hover == item.box {
-                        RoundedRectangle(cornerRadius: 4).stroke(accent, style: StrokeStyle(lineWidth: selected ? 2 : 1, dash: selected ? [] : [4]))
-                            .frame(width: r.width, height: r.height).offset(x: r.minX, y: r.minY)
-                    }
+                    let r = rect(item.box.insetBy(dx: -0.01, dy: -0.01))
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.white.opacity(0.001))
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(accent.opacity(selected || hover == item.box ? 1 : 0), style: StrokeStyle(lineWidth: selected ? 2 : 1, dash: selected ? [] : [4])))
+                        .frame(width: r.width, height: r.height)
+                        .contentShape(Rectangle())
+                        .onHover { inside in
+                            hover = inside ? item.box : (hover == item.box ? nil : hover)
+                            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                        }
+                        .onTapGesture { studio.tapPreview(at: CGPoint(x: item.box.midX, y: item.box.midY)) }
+                        .help("Clique para editar este texto")
+                        .offset(x: r.minX, y: r.minY)
                 }
             }
-            .onContinuousHover { phase in
-                if case .active(let p) = phase {
-                    let n = CGPoint(x: (p.x - origin.x) / w, y: (p.y - origin.y) / h)
-                    let box = boxes.first { $0.box.insetBy(dx: -0.015, dy: -0.015).contains(n) }?.box
-                    if box != hover { hover = box }
-                    if box != nil { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
-                } else { hover = nil; NSCursor.arrow.set() }
-            }
-            .gesture(SpatialTapGesture().onEnded { value in
-                studio.tapPreview(at: CGPoint(x: (value.location.x - origin.x) / w, y: (value.location.y - origin.y) / h))
-            })
-            .help("Clique num texto ou legenda da prévia para editá-lo")
+            .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
         }
         .onAppear(perform: refresh)
         .onChange(of: clock.time) { if !clock.playing { refresh() } }

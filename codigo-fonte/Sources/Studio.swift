@@ -32,7 +32,7 @@ import UniformTypeIdentifiers
     @Published private(set) var pendingChange = false
     var canUndo: Bool { historyIndex > 0 || pendingChange }
     var canRedo: Bool { historyIndex < history.count - 1 }
-    @Published var libraryVersion = 0
+    @Published var libraryVersion = 0 { willSet { Library.invalidate() } }
     @Published var clips: [ClipSuggestion] = []
     @Published var extraLanguages: Set<String> = []
     @Published var requestedTab: String?
@@ -78,7 +78,7 @@ import UniformTypeIdentifiers
     var voiceKey = ""
     var voiceTask: Task<Void, Never>?
     private var timeObserver: Any?
-    static let cacheDirectory: URL = {
+    nonisolated static let cacheDirectory: URL = {
         let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("CortaStudio", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
@@ -125,6 +125,23 @@ import UniformTypeIdentifiers
         }
     }
     func cancel() { task?.cancel(); message = "Cancelando…" }
+    /// Arquivos no iCloud que não estão no Mac (só o "atalho"): baixa antes, com aviso, em vez de o app ficar parado esperando.
+    static func ensureDownloaded(_ url: URL, status: @MainActor @escaping (String) -> Void) async throws {
+        let keys: Set<URLResourceKey> = [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]
+        guard let values = try? url.resourceValues(forKeys: keys), values.isUbiquitousItem == true,
+              values.ubiquitousItemDownloadingStatus != .current else { return }
+        try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+        let start = Date()
+        while true {
+            try Task.checkCancellation()
+            var fresh = url; fresh.removeAllCachedResourceValues()
+            if (try? fresh.resourceValues(forKeys: keys))?.ubiquitousItemDownloadingStatus == .current { return }
+            let elapsed = Int(Date().timeIntervalSince(start))
+            await status("Baixando “\(url.lastPathComponent)” do iCloud (\(elapsed / 60) min \(elapsed % 60) s)… Para não esperar da próxima vez: no Finder, botão direito ▸ Manter Baixado.")
+            if elapsed > 3600 { throw StudioError("O iCloud não terminou de baixar o vídeo em 1 hora. Verifique a internet e o espaço livre do Mac.") }
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+    }
     func chooseVideo() {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.movie, .audio]; panel.allowsMultipleSelection = false
         panel.message = "Escolha um vídeo (horizontal ou vertical) ou uma narração só em áudio. O original será preservado."
@@ -134,6 +151,7 @@ import UniformTypeIdentifiers
     func loadVideo(_ url: URL) {
         operation("Abrindo seu vídeo…") {
             var url = url
+            try await Self.ensureDownloaded(url) { text in self.message = text }
             // Narração só em áudio: vira um vídeo vertical para editar com imagens e textos (modelo Narração + texto animado).
             if let type = UTType(filenameExtension: url.pathExtension), type.conforms(to: .audio), !type.conforms(to: .movie) {
                 self.message = "Preparando a narração para edição…"
@@ -141,7 +159,7 @@ import UniformTypeIdentifiers
             }
             let info = try await MediaEngine.info(url)
             self.source = url; self.media = info; self.captions = []; self.summary = ""
-            self.effects = []; self.chat = []; self.faceTrack = []; self.clips = []; self.exclusions = []; self.transitionMarks = []; self.splits = []; self.videoHook = nil; self.selection = nil; self.gaze = nil
+            self.effects = []; self.chat = []; self.faceTrack = MediaEngine.loadFaceCache(url); self.clips = []; self.exclusions = []; self.transitionMarks = []; self.splits = []; self.videoHook = nil; self.selection = nil; self.gaze = nil
             self.activeClipID = nil; self.mainEdit = nil; self.projectFolder = nil; self.lastSaved = nil; self.unsavedChanges = false
             self.voiceURL = nil; self.voiceKey = ""; self.liveItem = nil; self.liveBuilt = nil
             self.support = nil; self.lastExport = nil
@@ -240,6 +258,13 @@ import UniformTypeIdentifiers
     }
     private func performTranscription() async throws {
         guard let source else { throw StudioError("Escolha um vídeo primeiro.") }
+        // Transcrição guardada em disco por vídeo: reabrir o mesmo vídeo não transcreve de novo.
+        let modified = (try? source.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0
+        let cached = Self.cacheDirectory.appendingPathComponent("transcricao-" + SHA256Hex.of("\(source.path)|\(modified)|t-v1") + ".json")
+        if let data = try? Data(contentsOf: cached), let saved = try? JSONDecoder().decode([Caption].self, from: data), !saved.isEmpty {
+            captions = saved; invalidatePreview(); return
+        }
+        defer { if !captions.isEmpty, let data = try? JSONEncoder().encode(captions) { try? data.write(to: cached, options: .atomic) } }
         if #available(macOS 26.0, *) {
             let result = try await MediaEngine.transcribe(source, directory: scratch) { text in Task { @MainActor in self.message = text } }
             try Task.checkCancellation()
@@ -251,11 +276,13 @@ import UniformTypeIdentifiers
             invalidatePreview()
         } else { throw StudioError("A transcrição local desta versão precisa do macOS 26 ou posterior. Neste sistema, importe um SRT para continuar editando.") }
     }
-    private func prepareFace() async {
-        guard let source, let media, settings.fillFrame, faceTrack.isEmpty,
+    func prepareFace() async {
+        guard let source, let media, settings.fillFrame,
               (settings.vertical && media.size.width > media.size.height) || (!settings.vertical && media.size.height > media.size.width) else { return }
         message = "Acompanhando o rosto para o reenquadramento…"
-        if let track = try? await MediaEngine.trackFace(source, duration: media.duration, status: { text in Task { @MainActor in self.message = text } }) {
+        // Só os trechos da edição atual (num vídeo longo, rastrear tudo levava minutos); o resultado fica guardado em disco.
+        let ranges = (try? makeTimeline(snapshot()).cuts) ?? [Cut(start: 0, end: media.duration)]
+        if let track = try? await MediaEngine.trackFace(source, ranges: ranges, known: faceTrack, status: { text in Task { @MainActor in self.message = text } }) {
             faceTrack = track
         }
     }
@@ -571,6 +598,56 @@ struct StudioView: View {
             studio.openClip(studio.clips[0]); try? await Task.sleep(nanoseconds: 800_000_000)
             studio.hideCaption(2); try? await Task.sleep(nanoseconds: 1_200_000_000)
             rightTab = "Cortes"; try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+        if args.contains("--ui-load-test") {
+            // Vídeo longo transcrito + alguns cortes, para medir se a interface fica pesada.
+            try? await studio.performTranscriptionPublic()
+            studio.clips = stride(from: 40, to: 900, by: 140).map { ClipSuggestion(title: "Corte \($0)", hook: "Gancho", reason: "teste", startID: $0, endID: $0 + 10) }
+            if let tab = args.firstIndex(of: "--tab").map({ args[$0 + 1] }) { rightTab = tab }
+            studio.seek(600)
+            print("CARREGADO \(studio.captions.count) legendas · \(studio.clips.count) cortes")
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            exit(0)
+        }
+        if let k = args.firstIndex(of: "--clip-export-test"), args.count > k + 1 {
+            // Abre um corte (legendas a–b, com gancho em vídeo) como o usuário faria e exporta, medindo cada passo.
+            let parts = args[k + 1].split(separator: ":").map(String.init)
+            let a = Int(parts[0]) ?? 433, b = Int(parts[1]) ?? 444
+            var tt = Date()
+            try? await studio.performTranscriptionPublic()
+            print("TEMPO transcrição: \(Int(Date().timeIntervalSince(tt))) s · \(studio.captions.count) legendas"); tt = Date()
+            var clip = ClipSuggestion(title: "Teste", hook: "Gancho", reason: "teste", startID: a, endID: b)
+            clip.template = "reels-ethos"
+            if let ca = studio.captions.first(where: { $0.id == a + 4 }) { clip.videoHook = VideoHook(start: ca.start, end: ca.end) }
+            studio.clips = [clip]
+            var t0 = Date()
+            studio.openClip(clip)
+            print("TEMPO abrir corte (bloqueando a tela): \(String(format: "%.2f", Date().timeIntervalSince(t0))) s")
+            t0 = Date(); _ = studio.editedDuration; print("TEMPO duração editada: \(String(format: "%.3f", Date().timeIntervalSince(t0))) s")
+            t0 = Date(); _ = studio.clipWasEdited(clip); print("TEMPO clipWasEdited: \(String(format: "%.3f", Date().timeIntervalSince(t0))) s")
+            t0 = Date(); _ = studio.generatedState(clip); print("TEMPO generatedState: \(String(format: "%.3f", Date().timeIntervalSince(t0))) s")
+            t0 = Date(); _ = studio.visibleTextBoxes(); print("TEMPO caixas da prévia: \(String(format: "%.3f", Date().timeIntervalSince(t0))) s")
+            t0 = Date(); _ = Library.imageNames; _ = Library.musicNames; print("TEMPO ler biblioteca: \(String(format: "%.3f", Date().timeIntervalSince(t0))) s")
+            if let v = ProcessInfo.processInfo.environment["CORTA_FRAME_SCALE"].flatMap(Double.init) { studio.settings.frameScale = v; studio.invalidatePreview() }
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            print("ROSTO \(studio.faceTrack.count) pontos")
+            print("PRÉVIA ao vivo pronta: \(studio.liveItem != nil) · erro \(studio.error ?? "-") · duração \(String(format: "%.1f", studio.editedDuration)) s · status \(studio.liveStatus) · item \(studio.player?.currentItem?.status.rawValue ?? -1)")
+            if let item = studio.player?.currentItem, let out = ProcessInfo.processInfo.environment["CORTA_PREVIEW_PNG"] {
+                let g = AVAssetImageGenerator(asset: item.asset); g.videoComposition = item.videoComposition
+                g.requestedTimeToleranceBefore = .zero; g.requestedTimeToleranceAfter = .zero
+                for t in [1.0, 10.0] {
+                    if let cg = try? await g.image(at: CMTime(seconds: t, preferredTimescale: 600)).image {
+                        try? NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out + "-\(Int(t)).png"))
+                        print("QUADRO da prévia em \(t) s salvo (\(cg.width)×\(cg.height))")
+                    } else { print("QUADRO da prévia em \(t) s: FALHOU") }
+                }
+            }
+            if parts.count > 2 {
+                t0 = Date()
+                do { try await studio.render(state: studio.state(of: clip), to: URL(fileURLWithPath: parts[2])); print("EXPORTOU em \(Int(Date().timeIntervalSince(t0))) s · \(String(format: "%.1f", try await MediaEngine.info(URL(fileURLWithPath: parts[2])).duration)) s") }
+                catch { print("ERRO export \(error)") }
+            }
+            exit(0)
         }
         if let k = args.firstIndex(of: "--template-test"), args.count > k + 1, let t = ReelsTemplate(rawValue: args[k + 1]) {
             var o = TemplateOptions()
@@ -899,6 +976,11 @@ struct StudioView: View {
                     Text("Enquadrar").font(.caption).foregroundStyle(.secondary)
                     PreviewGrid(previews: looks, prefix: "enq:", items: SettingPreviews.framings, isSelected: { $0 == (studio.settings.fillFrame ? "fill" : "fit") }, vertical: studio.settings.vertical, columns: 2) { studio.settings.fillFrame = $0 == "fill" }
                     if studio.settings.fillFrame {
+                        HStack {
+                            Text("Aproximação").font(.caption).foregroundStyle(.secondary)
+                            Slider(value: $studio.settings.frameScale, in: 0.5...1)
+                            Text(studio.settings.frameScale > 0.99 ? "justa" : "\(Int((1 - studio.settings.frameScale) * 200))% mais aberta").font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 90, alignment: .trailing)
+                        }.help("Se o rosto ficar perto demais (vídeo horizontal virando vertical), deixe mais aberto: o alto e o baixo são completados com o próprio vídeo desfocado.")
                         HStack {
                             Button(studio.faceTrack.isEmpty ? "Acompanhar rosto" : "Rosto acompanhado ✓", action: studio.trackFaceNow).font(.caption).disabled(studio.source == nil)
                             Spacer()

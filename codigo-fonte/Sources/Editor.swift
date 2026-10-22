@@ -144,7 +144,7 @@ extension Studio {
         return (first.0, last.1)
     }
 
-    func addEffect(_ kind: Effect.Kind, start: Double? = nil, end: Double? = nil, zoomStyle: String = "suave", fxStyle: String = "tremor") {
+    func addEffect(_ kind: Effect.Kind, start: Double? = nil, end: Double? = nil, zoomStyle: String = "suave", fxStyle: String = "tremor", textStyle: String = "destaque") {
         guard source != nil else { return }
         var a = start ?? clock.time, b = end ?? (a + (kind == .zoom ? 2.5 : 3.5))
         if case .range(let s, let e)? = selection, start == nil { a = s; b = e }
@@ -153,7 +153,13 @@ extension Studio {
         var effect = Effect(kind: kind, start: sa, end: sb)
         switch kind {
         case .zoom: effect.amount = zoomStyle == "corte" ? 1.22 : 1.18; effect.style = zoomStyle; effect.speed = Effect.defaultSpeed(zoomStyle)
-        case .texto: effect.text = "Seu texto aqui"; effect.style = "destaque"; effect.animation = "subir"
+        case .texto:
+            effect.style = textStyle
+            effect.text = TextStyles.all.first { $0.id == textStyle && textStyle != "destaque" }?.sample ?? "Seu texto aqui"
+            effect.animation = ["cartao": "deslizar", "lista": "deslizar", "capitulo": "revelar", "impacto": "pular", "pergunta": "escala"][textStyle] ?? "subir"
+            if textStyle == "lista" {
+                effect.asset = effects.filter { $0.kind == .texto && $0.style == "lista" }.min { abs($0.start - sa) < abs($1.start - sa) }?.asset ?? "lista-" + UUID().uuidString.prefix(6)
+            }
         case .imagem: effect.asset = Library.imageNames.first ?? ""; effect.style = "tela-cheia"
         case .video: effect.asset = Library.videoNames.first ?? ""; effect.style = "tela-cheia"
         case .fx: effect.style = fxStyle; effect.amount = 0.6

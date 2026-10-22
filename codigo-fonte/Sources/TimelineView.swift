@@ -167,7 +167,11 @@ struct TimelinePanel: View {
     @ViewBuilder private func addButtons(_ time: Double?) -> some View {
         Menu { ForEach(Effect.zoomStyles, id: \.id) { z in Button(z.name) { add(.zoom, time, zoom: z.id) } } } label: { Label("Zoom", systemImage: "plus.magnifyingglass") }
         Menu { ForEach(Effect.fxStyles, id: \.id) { f in Button(f.name) { if let time { studio.addEffect(.fx, start: time, end: nil, fxStyle: f.id) } else { studio.addEffect(.fx, fxStyle: f.id) }; addMenu = nil } } } label: { Label("Efeito de vídeo", systemImage: "sparkles.tv") }
-        Button { add(.texto, time) } label: { Label("Texto / título", systemImage: "textformat") }
+        Menu {
+            ForEach(TextStyles.all) { style in
+                Button(style.name) { if let time { studio.addEffect(.texto, start: time, end: nil, textStyle: style.id) } else { studio.addEffect(.texto, textStyle: style.id) }; addMenu = nil }
+            }
+        } label: { Label("Texto (destaque, capítulo, citação, lista…)", systemImage: "textformat") }
         Button { imageHere(time) } label: { Label("Buscar ou gerar imagem para a narração…", systemImage: "photo.on.rectangle.angled") }
         Button { add(.imagem, time) } label: { Label("Imagem da biblioteca", systemImage: "photo") }.disabled(Library.imageNames.isEmpty)
     }
@@ -305,7 +309,9 @@ private struct TimelineTile: View {
         Divider()
         Menu("Adicionar efeito de vídeo aqui") { ForEach(Effect.fxStyles, id: \.id) { f in Button(f.name) { studio.addEffect(.fx, start: t, end: nil, fxStyle: f.id) } } }
         Menu("Adicionar zoom aqui") { ForEach(Effect.zoomStyles, id: \.id) { z in Button(z.name) { studio.addEffect(.zoom, start: t, end: nil, zoomStyle: z.id) } } }
-        Button("Adicionar texto aqui") { studio.addEffect(.texto, start: t, end: nil) }
+        Menu("Adicionar texto aqui") {
+            ForEach(TextStyles.all) { style in Button(style.name) { studio.addEffect(.texto, start: t, end: nil, textStyle: style.id) } }
+        }
         Button("Imagem para a narração aqui…") { studio.requestImage(outputStart: t, outputEnd: min(playhead.duration, t + 4)) }
         Button("Imagem ou vídeo de uma pasta / internet aqui…") { studio.openBroll(target: .range(t, min(playhead.duration, t + 4))) }
         Button("Adicionar legenda aqui") { studio.seek(t); studio.addCaption() }
@@ -377,7 +383,6 @@ private struct TimelineTile: View {
                 let rect = CGRect(x: x(0), y: video.minY, width: max(2, x(end) - x(0)), height: video.height)
                 context.fill(Path(roundedRect: rect, cornerRadius: 4), with: .color(Color(red: 0.55, green: 0.35, blue: 0.85).opacity(0.28)))
                 context.stroke(Path(roundedRect: rect, cornerRadius: 4), with: .color(Color(red: 0.70, green: 0.50, blue: 1.0)), lineWidth: 1.5)
-                context.draw(Text("▶ GANCHO").font(.system(size: 9, weight: .bold)).foregroundColor(.white), at: CGPoint(x: rect.minX + 6, y: rect.minY + 8), anchor: .leading)
             }
         }
         // Junções de cortes, com losango clicável para escolher a transição

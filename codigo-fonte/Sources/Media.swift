@@ -212,15 +212,38 @@ enum MediaEngine {
     }
 
     /// Acompanha o rosto principal amostrando um quadro por segundo; devolve posições horizontais suavizadas (0…1).
-    static func trackFace(_ url: URL, duration: Double, status: @escaping @Sendable (String) -> Void) async throws -> [FacePoint] {
+    /// Rosto só nos trechos pedidos (ex.: os do corte aberto), juntando com o que já se conhece e guardando em disco.
+    static func trackFace(_ url: URL, ranges: [Cut], known: [FacePoint], status: @escaping @Sendable (String) -> Void) async throws -> [FacePoint] {
+        let missing = ranges.filter { r in !known.contains { $0.time >= r.start - 2.5 && $0.time <= r.end + 2.5 } }
+        guard !missing.isEmpty else { return known }
+        var found: [FacePoint] = []
+        for (i, r) in missing.enumerated() {
+            status("Acompanhando o rosto no corte: \(i + 1) de \(missing.count)…")
+            if let points = try? await trackFace(url, duration: r.end, from: max(0, r.start - 1), step: 1) { found += points }
+        }
+        let merged = (known + found).sorted { $0.time < $1.time }
+        saveFaceCache(url, merged)
+        return merged
+    }
+    private static func faceCacheURL(_ url: URL) -> URL {
+        let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0
+        return Studio.cacheDirectory.appendingPathComponent("rosto-" + SHA256Hex.of("\(url.path)|\(modified)|face-v1") + ".json")
+    }
+    static func loadFaceCache(_ url: URL) -> [FacePoint] {
+        (try? JSONDecoder().decode([FacePoint].self, from: Data(contentsOf: faceCacheURL(url)))) ?? []
+    }
+    static func saveFaceCache(_ url: URL, _ points: [FacePoint]) {
+        try? JSONEncoder().encode(points).write(to: faceCacheURL(url), options: .atomic)
+    }
+    static func trackFace(_ url: URL, duration: Double, from start: Double = 0, step fixedStep: Double? = nil, status: @escaping @Sendable (String) -> Void = { _ in }) async throws -> [FacePoint] {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 480, height: 480)
         generator.requestedTimeToleranceBefore = CMTime(seconds: 0.3, preferredTimescale: 600)
         generator.requestedTimeToleranceAfter = CMTime(seconds: 0.3, preferredTimescale: 600)
-        let step = duration > 900 ? 2.0 : 1.0
-        let times = stride(from: 0.2, to: max(0.3, duration), by: step).map { CMTime(seconds: $0, preferredTimescale: 600) }
+        let step = fixedStep ?? (duration > 900 ? 2.0 : 1.0)
+        let times = stride(from: start + 0.2, to: max(start + 0.3, duration), by: step).map { CMTime(seconds: $0, preferredTimescale: 600) }
         var raw: [FacePoint] = []
         var done = 0
         for await result in generator.images(for: times) {
@@ -623,10 +646,13 @@ final class FramePainter: @unchecked Sendable {
 
         func presenter(in rect: CGRect) -> CIImage {
             let fill = settings.fillFrame || rect.size != size
-            var layer = fit(source, into: rect, fill: fill, zoom: zoom, focus: fx, focusY: focusY)
-            if !fill {
-                let back = fit(source, into: rect, fill: true).applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: size.width * 0.03])
-                    .applyingFilter("CIColorControls", parameters: [kCIInputBrightnessKey: -0.18, kCIInputSaturationKey: 0.8]).cropped(to: rect)
+            // Enquadramento mais aberto: mostra mais do vídeo e completa com o próprio vídeo desfocado.
+            let open = fill && rect.size == size && settings.frameScale < 0.999
+            var layer = fit(source, into: rect, fill: fill, zoom: zoom * (open ? settings.frameScale : 1), focus: fx, focusY: focusY)
+            if !fill || open {
+                // Fundo: o próprio quadro bem desfocado (vira só cor e luz, sem formas), um pouco mais escuro.
+                let back = fit(source, into: rect, fill: true).clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: size.width * (open ? 0.09 : 0.03)])
+                    .applyingFilter("CIColorControls", parameters: [kCIInputBrightnessKey: open ? -0.08 : -0.18, kCIInputSaturationKey: 0.75]).cropped(to: rect)
                 layer = layer.composited(over: back)
             }
             return grade(layer)

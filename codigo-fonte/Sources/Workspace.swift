@@ -139,6 +139,7 @@ extension Studio {
     /// Abre um corte no editor ao vivo (com as edições que você já fez nele, se houver).
     func openClip(_ clip: ClipSuggestion) {
         guard clip.id != activeClipID else { return }
+        guard !captions.isEmpty else { message = "Transcrevendo o vídeo antes de abrir o corte…"; operation("Transcrevendo…") { try await self.performTranscriptionPublic(); self.openClip(clip) }; return }
         stashCurrent()
         let target = clips.first(where: { $0.id == clip.id })?.edit ?? generatedState(clip)
         activeClipID = clip.id
@@ -148,6 +149,13 @@ extension Studio {
         summary = "Editando o corte “\(clip.title)”. Tudo o que você mudar fica guardado neste corte."
         scheduleLive(delay: 0)
         message = "Corte aberto no editor. O que aparece na tela é o que será exportado."
+        // Acompanha o rosto nos trechos deste corte (rápido) e atualiza a prévia.
+        Task { @MainActor in
+            let before = self.faceTrack.count
+            await self.prepareFace()
+            if self.faceTrack.count != before { self.scheduleLive(delay: 0) }
+            self.message = "Corte aberto no editor. O que aparece na tela é o que será exportado."
+        }
     }
     func openMainVideo() {
         guard activeClipID != nil else { return }
@@ -182,8 +190,18 @@ extension Studio {
     }
 
     /// Exporta exatamente o que está na tela.
-    func exportCurrent() { export(state: snapshot(), name: currentExportName) }
-    func exportClip(_ clip: ClipSuggestion) { export(state: state(of: clip), name: safeName(clip.title), post: clip.caption.isEmpty ? nil : postText(clip)) }
+    func exportCurrent() {
+        if let d = try? makeTimeline(snapshot()).duration, d > 600 {
+            let alert = NSAlert()
+            alert.messageText = "Exportar \(Int(d / 60)) minutos de vídeo?"
+            alert.informativeText = "Num MacBook Air, um vídeo longo pode levar mais de uma hora para exportar e ocupar \(Int(d * 1.5 / 1000)) GB ou mais. O app mostra o tempo restante e você pode cancelar. Se quer um Reels, abra um corte na aba Cortes antes."
+            alert.addButton(withTitle: "Exportar mesmo assim"); alert.addButton(withTitle: "Cancelar")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        export(state: snapshot(), name: currentExportName) }
+    func exportClip(_ clip: ClipSuggestion) {
+        guard !captions.isEmpty else { error = "Transcreva o vídeo antes (abra o corte ou clique em Encontrar cortes): sem a transcrição o corte não tem começo e fim."; return }
+        export(state: state(of: clip), name: safeName(clip.title), post: clip.caption.isEmpty ? nil : postText(clip)) }
 
     private func export(state: EditState, name: String, post: String? = nil) {
         guard source != nil else { return }
@@ -228,15 +246,34 @@ extension Studio {
     func render(state: EditState, to url: URL) async throws {
         guard let source, let media else { throw StudioError("Escolha um vídeo primeiro.") }
         let timeline = try makeTimeline(state)
-        if state.settings.fillFrame, faceTrack.isEmpty, (state.settings.vertical && media.size.width > media.size.height) || (!state.settings.vertical && media.size.height > media.size.width) {
-            faceTrack = (try? await MediaEngine.trackFace(source, duration: media.duration) { text in Task { @MainActor in self.message = text } }) ?? []
+        // Espaço livre: com o disco cheio a exportação parava no meio, sem aviso.
+        let needed = Int64(timeline.duration * 1_500_000 * 1.2) + 300_000_000
+        if let free = try? url.deletingLastPathComponent().resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage,
+           free < needed {
+            throw StudioError("Falta espaço no disco para exportar: este vídeo precisa de cerca de \(needed / 1_000_000_000 + 1) GB e há \(free / 1_000_000_000) GB livres. Libere espaço (Ajustes ▸ Geral ▸ Armazenamento) ou exporte um trecho menor.")
+        }
+        try await Self.ensureDownloaded(source) { text in self.message = text }
+        if state.settings.fillFrame, (state.settings.vertical && media.size.width > media.size.height) || (!state.settings.vertical && media.size.height > media.size.width) {
+            // Rosto só nos trechos que vão para o arquivo (antes: o vídeo inteiro, o que travava cortes de vídeos longos).
+            faceTrack = (try? await MediaEngine.trackFace(source, ranges: timeline.cuts, known: faceTrack) { text in Task { @MainActor in self.message = text } }) ?? faceTrack
         }
         let voice = state.settings.studioVoice ? try await VoiceStudio.process(video: source, isolation: state.settings.voiceIsolation, directory: Studio.cacheDirectory) { text in Task { @MainActor in self.message = text } } : nil
         if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
         message = "Exportando \(url.lastPathComponent)…"
+        let started = Date()
         try await MediaEngine.render(source: source, support: support, timeline: timeline, settings: state.settings, effects: state.effects,
                                      faceTrack: state.settings.fillFrame ? faceTrack : [], voice: voice, transitions: state.transitionMarks,
-                                     destination: url, preview: false) { p in Task { @MainActor in self.progress = p } }
+                                     destination: url, preview: false) { p in
+            Task { @MainActor in
+                self.progress = p
+                // Tempo restante estimado, para não parecer travado em exportações longas.
+                let elapsed = Date().timeIntervalSince(started)
+                if p > 0.02 {
+                    let left = Int(elapsed / p * (1 - p))
+                    self.message = "Exportando \(url.lastPathComponent): \(Int(p * 100))% · falta(m) cerca de \(left >= 60 ? "\(left / 60) min" : "\(left) s")"
+                }
+            }
+        }
         let base = url.deletingPathExtension()
         if state.settings.captions || !timeline.captions.isEmpty {
             try Subtitles.write(timeline.captions).write(to: base.appendingPathExtension("srt"), atomically: true, encoding: .utf8)

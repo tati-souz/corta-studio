@@ -1,4 +1,4 @@
-# Corta Studio — Projeto Ethos (versão 0.14.0)
+# Corta Studio — Projeto Ethos (versão 0.14.3)
 
 Editor de vídeo para Mac (Apple Silicon). Você marca o que quer, clica em **Editar com IA** e o Claude monta a edição. Depois você refina conversando no **chat**, salva o projeto e exporta. A IA usa a **sua assinatura Claude** (não há cobrança por API).
 

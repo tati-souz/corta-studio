@@ -37,10 +37,20 @@ enum Library {
             """.write(to: notes, atomically: true, encoding: .utf8)
         }
     }
+    /// Listagens recentes: a interface pede os nomes a cada redesenho, e ler a pasta (no iCloud) toda vez travava a tela.
+    nonisolated(unsafe) private static var listings: [String: (time: Date, names: [String])] = [:]
+    private static let lock = NSLock()
+    static func invalidate() { lock.lock(); listings = [:]; lock.unlock() }
     static func files(in folder: URL, types: Set<String>) -> [String] {
-        ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+        let key = folder.path + "|" + types.sorted().joined(separator: ",")
+        lock.lock()
+        if let cached = listings[key], Date().timeIntervalSince(cached.time) < 4 { lock.unlock(); return cached.names }
+        lock.unlock()
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
             .filter { types.contains(($0 as NSString).pathExtension.lowercased()) }
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        lock.lock(); listings[key] = (Date(), names); lock.unlock()
+        return names
     }
     static var imageNames: [String] { files(in: images, types: imageTypes) }
     static var musicNames: [String] { files(in: music, types: audioTypes) }
@@ -63,6 +73,7 @@ enum Library {
             let target = folder.appendingPathComponent(url.lastPathComponent)
             if !FileManager.default.fileExists(atPath: target.path) { try? FileManager.default.copyItem(at: url, to: target) }
         }
+        invalidate()
     }
     static func reveal() { prepare(); NSWorkspace.shared.open(root) }
 }

@@ -362,6 +362,8 @@ struct EditSettings: Codable, Equatable {
     var captionColor = ""       // "" = a cor do estilo
     var captionScale = 1.0
     var voiceVolume = 1.0
+    /// Enquadramento vertical de vídeo horizontal: 1 = recorte justo; menor = mais aberto, com fundo desfocado em cima e embaixo.
+    var frameScale = 1.0
     var musicFile = ""
     var musicVolume = 0.12
     var ducking = true
@@ -398,6 +400,7 @@ struct EditSettings: Codable, Equatable {
         merged.musicVolume = min(0.6, max(0, merged.musicVolume.isFinite ? merged.musicVolume : 0.12))
         merged.captionScale = min(1.6, max(0.6, merged.captionScale.isFinite ? merged.captionScale : 1))
         merged.voiceVolume = min(2, max(0, merged.voiceVolume.isFinite ? merged.voiceVolume : 1))
+        merged.frameScale = min(1, max(0.5, merged.frameScale.isFinite ? merged.frameScale : 1))
         merged.fpsLimit = min(60, max(1, merged.fpsLimit))
         if !Self.platforms.contains(merged.platform) { merged.platform = self.platform }
         if partial["platform"] == nil, let vertical = partial["vertical"] as? Bool, vertical != (self.platform != "YouTube") {
