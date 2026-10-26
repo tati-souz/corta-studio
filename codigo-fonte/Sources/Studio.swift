@@ -367,7 +367,8 @@ import UniformTypeIdentifiers
         if let i = captions.firstIndex(where: { $0.id == id }) { captions[i].removedWords = nil }
     }
     private func apply(_ result: ClaudeConnection.EditResult) throws {
-        let newSettings = try settings.merging(result.settings)
+        var newSettings = try settings.merging(result.settings)
+        if let preset = result.settings["voicePreset"] as? String, preset != settings.voicePreset { newSettings.applyVoicePreset(preset) }
         commitHistory()
         captions = captions.map { cue in
             var cue = cue
@@ -452,7 +453,7 @@ import UniformTypeIdentifiers
     }
     private func studioVoice() async throws -> URL? {
         guard settings.studioVoice, let source else { return nil }
-        return try await VoiceStudio.process(video: source, isolation: settings.voiceIsolation, directory: Self.cacheDirectory) { text in Task { @MainActor in self.message = text } }
+        return try await VoiceStudio.process(video: source, params: settings.voiceParams, directory: Self.cacheDirectory) { text in Task { @MainActor in self.message = text } }
     }
     func cleanUp() { task?.cancel(); liveTask?.cancel(); voiceTask?.cancel(); player?.pause(); try? FileManager.default.removeItem(at: scratch) }
     func testExport() {
@@ -607,6 +608,41 @@ struct StudioView: View {
             studio.seek(600)
             print("CARREGADO \(studio.captions.count) legendas · \(studio.clips.count) cortes")
             try? await Task.sleep(nanoseconds: 60_000_000_000)
+            exit(0)
+        }
+        if let k = args.firstIndex(of: "--voice-test"), args.count > k + 1, let source = studio.source {
+            // Voz de estúdio num corte real: tempo de tratamento, volume da fala e ruído nas pausas, antes e depois.
+            let parts = args[k + 1].split(separator: ":").compactMap { Int($0) }
+            try? await studio.performTranscriptionPublic()
+            guard parts.count == 2, let a = studio.captions.first(where: { $0.id == parts[0] }), let b = studio.captions.first(where: { $0.id == parts[1] }) else { exit(1) }
+            let ranges = [Cut(start: a.start, end: b.end)]
+            func analyze(_ url: URL, from: Double, to: Double) -> String {
+                guard let f = try? AVAudioFile(forReading: url) else { return "ilegível" }
+                let sr = f.processingFormat.sampleRate
+                f.framePosition = AVAudioFramePosition(max(0, from) * sr)
+                let n = AVAudioFrameCount((to - from) * sr)
+                guard let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: n), (try? f.read(into: buf, frameCount: n)) != nil, let d = buf.floatChannelData?[0] else { return "ilegível" }
+                let w = Int(sr * 0.05); var rms: [Float] = []; var peak: Float = 0
+                for s in stride(from: 0, to: Int(buf.frameLength) - w, by: w) { var acc: Float = 0; for i in s..<(s + w) { acc += d[i] * d[i]; peak = max(peak, abs(d[i])) }; rms.append((acc / Float(w)).squareRoot()) }
+                rms.sort()
+                func db(_ x: Float) -> String { String(format: "%.1f", 20 * log10(max(x, 1e-6))) }
+                return "fala \(db(rms[Int(Double(rms.count) * 0.8)])) dB · pausas \(db(rms[Int(Double(rms.count) * 0.1)])) dB · pico \(db(peak)) dB"
+            }
+            let original = try? await MediaEngine.audioFile(source, directory: Studio.cacheDirectory)
+            if let original { print("VOZ original: \(analyze(original, from: a.start, to: b.end))") }
+            for preset in ["estudio", "baixa", "eco"] {
+                var s = studio.settings; s.applyVoicePreset(preset)
+                let t0 = Date()
+                do {
+                    let url = try await VoiceStudio.process(video: source, params: s.voiceParams, ranges: ranges, directory: Studio.cacheDirectory) { _ in }
+                    let off = VoiceStudio.offset(of: url)
+                    print("VOZ \(preset): \(Int(Date().timeIntervalSince(t0))) s de tratamento · \(analyze(url, from: a.start - off, to: b.end - off))")
+                    if let out = ProcessInfo.processInfo.environment["CORTA_VOICE_OUT"] {
+                        try? FileManager.default.removeItem(atPath: out + "-\(preset).m4a"); try? FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: out + "-\(preset).m4a"))
+                    }
+                } catch { print("VOZ \(preset): ERRO \(error)") }
+            }
+            if let original { try? FileManager.default.removeItem(at: original) }
             exit(0)
         }
         if let k = args.firstIndex(of: "--clip-export-test"), args.count > k + 1 {
@@ -1030,11 +1066,7 @@ struct StudioView: View {
 
                 sectionLabel("06", "Áudio")
                 VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Voz de estúdio", isOn: $studio.settings.studioVoice)
-                    if studio.settings.studioVoice {
-                        HStack { Text("Isolar voz").font(.caption); Slider(value: $studio.settings.voiceIsolation, in: 0...1) }
-                        Text("Remove ruído e eco, equaliza e padroniza o volume. Processa uma vez por vídeo.").font(.caption2).foregroundStyle(.secondary)
-                    }
+                    VoiceStudioPanel(studio: studio)
                     Toggle("Efeitos sonoros sutis", isOn: $studio.settings.soundEffects)
                     Picker("Música", selection: $studio.settings.musicFile) {
                         Text("Nenhuma").tag("")

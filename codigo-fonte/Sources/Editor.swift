@@ -73,21 +73,25 @@ extension Studio {
     /// Voz de estúdio para a edição ao vivo: usa a versão já processada; se não houver, processa em segundo plano e remonta.
     private func readyVoice() -> URL? {
         guard let source else { return nil }
-        let key = "\(source.path)|\(Int(settings.voiceIsolation * 100))"
+        // Só os trechos da edição atual (num corte de 30 s, poucos segundos de tratamento em vez do vídeo inteiro).
+        let ranges = (try? makeTimeline(snapshot()).cuts) ?? []
+        let params = settings.voiceParams
+        let key = "\(source.path)|\(params.signature)|\(ranges.first?.start ?? 0)|\(ranges.map(\.end).max() ?? 0)"
         if key == voiceKey, let voiceURL { return voiceURL }
         if voiceTask == nil || voiceKey != key {
-            voiceTask?.cancel(); voiceKey = key; voiceURL = nil
-            let isolation = settings.voiceIsolation
+            voiceTask?.cancel(); voiceKey = key
             voiceTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400_000_000)   // espera o fim do arraste dos ajustes
+                guard !Task.isCancelled else { return }
                 liveStatus = "Preparando a voz de estúdio…"
-                let url = try? await VoiceStudio.process(video: source, isolation: isolation, directory: Studio.cacheDirectory) { text in Task { @MainActor in self.liveStatus = text } }
+                let url = try? await VoiceStudio.process(video: source, params: params, ranges: ranges, directory: Studio.cacheDirectory) { text in Task { @MainActor in self.liveStatus = text } }
                 guard !Task.isCancelled, self.voiceKey == key else { return }
                 guard url != nil else { self.liveStatus = "Não foi possível preparar a voz de estúdio; o áudio original foi mantido."; self.settings.studioVoice = false; self.voiceTask = nil; return }
                 self.voiceURL = url; self.voiceTask = nil; self.liveStatus = ""
                 self.scheduleLive(delay: 0)
             }
         }
-        return nil
+        return voiceURL
     }
 
     func showLive() {

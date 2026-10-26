@@ -355,6 +355,23 @@ struct EditSettings: Codable, Equatable {
     // Áudio
     var studioVoice = false
     var voiceIsolation = 0.8
+    var voicePreset = "estudio"
+    var voiceEcho = 0.4
+    var voiceHiss = 0.3
+    var voiceHum = true
+    var voiceClarity = 0.5
+    var voiceWarmth = 0.3
+    var voiceLeveling = 0.6
+    var voiceLevel = 0.6
+    var voiceParams: VoiceParams {
+        VoiceParams(isolation: voiceIsolation, echo: voiceEcho, hiss: voiceHiss, hum: voiceHum, clarity: voiceClarity, warmth: voiceWarmth, leveling: voiceLeveling, level: voiceLevel)
+    }
+    mutating func applyVoicePreset(_ id: String) {
+        guard let preset = VoiceParams.presets.first(where: { $0.id == id }) else { return }
+        let p = preset.params
+        voicePreset = id; voiceIsolation = p.isolation; voiceEcho = p.echo; voiceHiss = p.hiss; voiceHum = p.hum
+        voiceClarity = p.clarity; voiceWarmth = p.warmth; voiceLeveling = p.leveling; voiceLevel = p.level
+    }
     var removeFillers = true
     var soundEffects = false
     // Personalização das legendas e volume da voz
@@ -401,6 +418,9 @@ struct EditSettings: Codable, Equatable {
         merged.captionScale = min(1.6, max(0.6, merged.captionScale.isFinite ? merged.captionScale : 1))
         merged.voiceVolume = min(2, max(0, merged.voiceVolume.isFinite ? merged.voiceVolume : 1))
         merged.frameScale = min(1, max(0.5, merged.frameScale.isFinite ? merged.frameScale : 1))
+        for path in [\EditSettings.voiceEcho, \.voiceHiss, \.voiceClarity, \.voiceWarmth, \.voiceLeveling, \.voiceLevel] {
+            let v = merged[keyPath: path]; merged[keyPath: path] = min(1, max(0, v.isFinite ? v : 0.5))
+        }
         merged.fpsLimit = min(60, max(1, merged.fpsLimit))
         if !Self.platforms.contains(merged.platform) { merged.platform = self.platform }
         if partial["platform"] == nil, let vertical = partial["vertical"] as? Bool, vertical != (self.platform != "YouTube") {

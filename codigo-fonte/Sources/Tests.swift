@@ -309,10 +309,10 @@ enum StudioTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let info = try await MediaEngine.info(video)
         let start = Date()
-        let voice = try await VoiceStudio.process(video: video, isolation: 0.8, directory: folder) { _ in }
+        let voice = try await VoiceStudio.process(video: video, params: VoiceParams(), directory: folder) { _ in }
         print("voz de estúdio: \(String(format: "%.1f", Date().timeIntervalSince(start))) s")
-        let dry = try await VoiceStudio.process(video: video, isolation: 0, directory: folder) { _ in }
-        let full = try await VoiceStudio.process(video: video, isolation: 1, directory: folder) { _ in }
+        let dry = try await VoiceStudio.process(video: video, params: VoiceParams(isolation: 0), directory: folder) { _ in }
+        let full = try await VoiceStudio.process(video: video, params: VoiceParams(isolation: 1), directory: folder) { _ in }
         let original = try await MediaEngine.audioFile(video, directory: folder)
         for (label, url) in [("original", original), ("sem isolar", dry), ("isolar 0.8", voice), ("isolar 1.0", full)] {
             var levels: [Double] = []

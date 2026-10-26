@@ -257,7 +257,7 @@ extension Studio {
             // Rosto só nos trechos que vão para o arquivo (antes: o vídeo inteiro, o que travava cortes de vídeos longos).
             faceTrack = (try? await MediaEngine.trackFace(source, ranges: timeline.cuts, known: faceTrack) { text in Task { @MainActor in self.message = text } }) ?? faceTrack
         }
-        let voice = state.settings.studioVoice ? try await VoiceStudio.process(video: source, isolation: state.settings.voiceIsolation, directory: Studio.cacheDirectory) { text in Task { @MainActor in self.message = text } } : nil
+        let voice = state.settings.studioVoice ? try await VoiceStudio.process(video: source, params: state.settings.voiceParams, ranges: timeline.cuts, directory: Studio.cacheDirectory) { text in Task { @MainActor in self.message = text } } : nil
         if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
         message = "Exportando \(url.lastPathComponent)…"
         let started = Date()

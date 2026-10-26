@@ -209,7 +209,8 @@ struct ClaudeModel: Identifiable, Hashable {
                 "transitions": ["type": "string", "enum": ["Corte seco", "Fade", "Flash", "Zoom", "Desfoque", "Chicote", "Chicote vertical", "Girar", "Glitch", "Pixelar", "Tremor", "Luz"]], "transitionAllCuts": ["type": "boolean"], "fadeInOut": ["type": "boolean"], "progressBar": ["type": "boolean"],
                 "watermark": ["type": "boolean"], "musicFile": ["type": "string"], "musicVolume": ["type": "number"], "ducking": ["type": "boolean"],
                 "shortVideo": ["type": "boolean"], "targetSeconds": ["type": "number"],
-                "studioVoice": ["type": "boolean"], "voiceIsolation": ["type": "number"], "removeFillers": ["type": "boolean"], "soundEffects": ["type": "boolean"],
+                "studioVoice": ["type": "boolean"], "voiceIsolation": ["type": "number"], "voicePreset": ["type": "string", "enum": VoiceParams.presets.map(\.id)],
+                "voiceEcho": ["type": "number"], "voiceHiss": ["type": "number"], "voiceClarity": ["type": "number"], "voiceWarmth": ["type": "number"], "voiceLeveling": ["type": "number"], "voiceLevel": ["type": "number"], "removeFillers": ["type": "boolean"], "soundEffects": ["type": "boolean"],
                 "portraitBlur": ["type": "boolean"], "eyeContact": ["type": "boolean"], "eyeContactStrength": ["type": "number"]]],
             "video_hook": ["type": "object", "additionalProperties": false, "required": ["enabled"], "properties": [
                 "enabled": ["type": "boolean"], "start_id": ["type": "integer"], "start_word": ["type": "integer"], "end_id": ["type": "integer"], "end_word": ["type": "integer"],
@@ -504,7 +505,8 @@ struct ClaudeModel: Identifiable, Hashable {
       "gerar_cortes" (sugere cortes curtos; count, length auto|curto|medio|longo|extra, prompt = tema a procurar), \
       "cartoes_citacao" (cartões com frases-chave ditas). Diga na resposta o que será feito.
     - settings: ajustes globais (legendas, cor, transições, música, gancho etc.). Recursos de imagem e som que você pode ligar: \
-      studioVoice (voz de estúdio: isola a voz, tira ruído e padroniza o volume; voiceIsolation 0–1), eyeContact (correção de olhar experimental, \
+      studioVoice (voz de estúdio: isola a voz, tira ruído e padroniza o volume; voicePreset estudio|natural|podcast|eco|baixa; ajustes 0–1: \
+      voiceIsolation barulho de fundo, voiceEcho eco, voiceHiss chiado, voiceClarity clareza, voiceWarmth corpo, voiceLeveling igualar volume, voiceLevel volume final), eyeContact (correção de olhar experimental, \
       eyeContactStrength 0–1, prefira 0.4–0.7), portraitBlur (desfoca o fundo atrás da pessoa), soundEffects (sons discretos em zooms, imagens e textos). Em "question" escreva um gancho/pergunta editorial curto para os \
       primeiros segundos quando fizer sentido; nunca o apresente como pergunta de seguidor.
 

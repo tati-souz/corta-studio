@@ -3,80 +3,153 @@ import AVFoundation
 import AudioToolbox
 import CryptoKit
 
-/// Voz de estúdio: isolamento de voz da Apple (AUSoundIsolation, o mesmo princípio do "Isolamento de voz" do Final Cut),
-/// filtro de graves, presença, compressor, limitador e volume padronizado. Processado uma vez por vídeo e reaproveitado.
-enum VoiceStudio {
-    static let targetRMS: Float = 0.10   // ≈ -20 dBFS na fala; o limitador segura os picos
+/// Ajustes da voz de estúdio (0 a 1 cada).
+struct VoiceParams: Hashable, Codable {
+    var isolation = 0.8   // barulho de fundo (isolamento de voz da Apple)
+    var echo = 0.4        // eco da sala
+    var hiss = 0.3        // chiado (agudos de ruído)
+    var hum = true        // zumbido elétrico (60 Hz)
+    var clarity = 0.5     // presença e definição das palavras
+    var warmth = 0.3      // corpo/graves da voz
+    var leveling = 0.6    // iguala falas baixas e altas (compressão)
+    var level = 0.6       // volume final
 
-    static func process(video: URL, isolation: Double, directory: URL, status: @escaping @Sendable (String) -> Void) async throws -> URL {
-        let key = "\(video.path)|\((try? video.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0)|\(Int(isolation * 100))|v2"
-        let name = "voz-" + SHA256.hash(data: Data(key.utf8)).prefix(10).map { String(format: "%02x", $0) }.joined() + ".m4a"
-        let cache = directory.appendingPathComponent(name)
+    var signature: String { [isolation, echo, hiss, clarity, warmth, leveling, level].map { String(Int(($0 * 100).rounded())) }.joined(separator: "-") + (hum ? "-h" : "") }
+    /// Volume de referência da fala (RMS): de ≈ -24 dBFS (0) a ≈ -15 dBFS (1).
+    var targetRMS: Float { Float(0.06 + 0.12 * level) }
+
+    static let presets: [(id: String, name: String, help: String, params: VoiceParams)] = [
+        ("estudio", "Estúdio", "Equilíbrio: tira ruído e eco, voz clara e volume padronizado.", VoiceParams()),
+        ("natural", "Natural", "Tratamento leve, mantém o som da sala.", VoiceParams(isolation: 0.4, echo: 0.2, hiss: 0.2, hum: false, clarity: 0.3, warmth: 0.2, leveling: 0.4, level: 0.5)),
+        ("podcast", "Podcast (forte)", "Voz próxima, encorpada e alta, como em podcast.", VoiceParams(isolation: 0.9, echo: 0.5, hiss: 0.4, hum: true, clarity: 0.7, warmth: 0.55, leveling: 0.85, level: 0.75)),
+        ("eco", "Sala com eco", "Para salas vazias ou com paredes lisas.", VoiceParams(isolation: 1, echo: 0.9, hiss: 0.3, hum: true, clarity: 0.6, warmth: 0.2, leveling: 0.6, level: 0.6)),
+        ("baixa", "Gravação baixa", "Sobe o volume e a clareza de uma gravação fraca, sem estourar.", VoiceParams(isolation: 0.7, echo: 0.3, hiss: 0.5, hum: true, clarity: 0.65, warmth: 0.3, leveling: 0.85, level: 0.85)),
+    ]
+}
+
+/// Voz de estúdio: isolamento de voz da Apple (AUSoundIsolation), filtro de zumbido, equalização (corpo, clareza, chiado),
+/// expansor contra eco/ruído nas pausas, compressor, limitador e volume padronizado. Processa só o trecho usado e guarda o resultado.
+enum VoiceStudio {
+    /// O arquivo tratado pode começar depois do início do vídeo (só o trecho usado); o deslocamento vai no nome.
+    static func offset(of url: URL) -> Double {
+        guard let part = url.deletingPathExtension().lastPathComponent.components(separatedBy: "-o").last, let ms = Double(part) else { return 0 }
+        return ms / 1000
+    }
+
+    private static func span(_ ranges: [Cut]?) -> (Double, Double)? {
+        guard let ranges, let first = ranges.map(\.start).min(), let last = ranges.map(\.end).max() else { return nil }
+        return (max(0, first - 1), last + 1)
+    }
+    private static func cacheURL(video: URL, params: VoiceParams, span: (Double, Double)?, directory: URL) -> URL {
+        let modified = (try? video.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0
+        let spanKey = span.map { "\(Int($0.0 * 10))-\(Int($0.1 * 10))" } ?? "tudo"
+        let key = "\(video.path)|\(modified)|\(params.signature)|\(spanKey)|v3"
+        let offsetMs = Int((span?.0 ?? 0) * 1000)
+        return directory.appendingPathComponent("voz-" + SHA256.hash(data: Data(key.utf8)).prefix(10).map { String(format: "%02x", $0) }.joined() + "-o\(offsetMs).m4a")
+    }
+    /// Voz do vídeo inteiro já tratada com estes ajustes (botão "Aplicar no áudio do vídeo todo").
+    static func wholeVideo(_ video: URL, params: VoiceParams, directory: URL) -> URL? {
+        let url = cacheURL(video: video, params: params, span: nil, directory: directory)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// ranges nil = o vídeo inteiro. Se o vídeo inteiro já foi tratado com os mesmos ajustes, reaproveita.
+    static func process(video: URL, params: VoiceParams, ranges: [Cut]? = nil, directory: URL, status: @escaping @Sendable (String) -> Void) async throws -> URL {
+        let modified = (try? video.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0
+        if let whole = wholeVideo(video, params: params, directory: directory) { return whole }
+        let span = span(ranges)
+        let cache = cacheURL(video: video, params: params, span: span, directory: directory)
         if FileManager.default.fileExists(atPath: cache.path) { return cache }
-        status("Voz de estúdio: separando o áudio…")
-        let extracted = try await MediaEngine.audioFile(video, directory: directory)
-        defer { try? FileManager.default.removeItem(at: extracted) }
+        let extracted = try await sourceAudio(video, modified: modified, directory: directory, status: status)
         let raw = directory.appendingPathComponent("voz-\(UUID().uuidString).caf")
         defer { try? FileManager.default.removeItem(at: raw) }
-        let rms = try await Task.detached(priority: .userInitiated) { try render(input: extracted, output: raw, isolation: isolation, status: status) }.value
+        let rms = try await Task.detached(priority: .userInitiated) { try render(input: extracted, output: raw, params: params, span: span, status: status) }.value
         status("Voz de estúdio: ajustando o volume…")
-        let gain = max(0.6, min(6, targetRMS / max(rms, 0.0005)))
+        let gain = max(0.5, min(10, params.targetRMS / max(rms, 0.0005)))
         try await Task.detached(priority: .userInitiated) { try applyGain(input: raw, output: cache, gain: gain) }.value
         return cache
     }
 
-    /// Renderização offline da cadeia de efeitos. Devolve o RMS dos trechos com fala.
-    private static func render(input: URL, output: URL, isolation: Double, status: @escaping @Sendable (String) -> Void) throws -> Float {
+    /// Áudio do vídeo extraído uma vez e guardado (antes era extraído a cada tratamento).
+    private static func sourceAudio(_ video: URL, modified: Double, directory: URL, status: @escaping @Sendable (String) -> Void) async throws -> URL {
+        let name = "audio-" + SHA256.hash(data: Data("\(video.path)|\(modified)".utf8)).prefix(10).map { String(format: "%02x", $0) }.joined() + ".m4a"
+        let cached = directory.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: cached.path) { return cached }
+        status("Voz de estúdio: separando o áudio do vídeo (só na primeira vez)…")
+        let extracted = try await MediaEngine.audioFile(video, directory: directory)
+        try? FileManager.default.moveItem(at: extracted, to: cached)
+        return FileManager.default.fileExists(atPath: cached.path) ? cached : extracted
+    }
+
+    private static func effect(_ subtype: OSType) -> AVAudioUnitEffect {
+        AVAudioUnitEffect(audioComponentDescription: AudioComponentDescription(componentType: kAudioUnitType_Effect, componentSubType: subtype,
+                                                                              componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0))
+    }
+
+    /// Renderização offline da cadeia de efeitos no trecho pedido. Devolve o RMS dos trechos com fala.
+    private static func render(input: URL, output: URL, params p: VoiceParams, span: (Double, Double)?, status: @escaping @Sendable (String) -> Void) throws -> Float {
         let file = try AVAudioFile(forReading: input)
+        let sourceRate = file.processingFormat.sampleRate
         let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
         engine.attach(player)
         var chain: [AVAudioNode] = []
-        if isolation > 0.01 {
-            let isolator = AVAudioUnitEffect(audioComponentDescription: AudioComponentDescription(componentType: kAudioUnitType_Effect, componentSubType: 0x766f6973 /* vois */,
-                                                                                               componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0))
-            AudioUnitSetParameter(isolator.audioUnit, 0, kAudioUnitScope_Global, 0, AudioUnitParameterValue(isolation * 100), 0)
+        // 1) Barulho de fundo: isolamento de voz da Apple.
+        if p.isolation > 0.01 {
+            let isolator = effect(0x766f6973 /* vois */)
+            AudioUnitSetParameter(isolator.audioUnit, 0, kAudioUnitScope_Global, 0, AudioUnitParameterValue(p.isolation * 100), 0)
             // Modo "Voice" (1): nos testes com gravação real, o modo "High Quality Voice" (0) aumentou o ruído nas pausas.
             AudioUnitSetParameter(isolator.audioUnit, 1, kAudioUnitScope_Global, 0, 1, 0)
             chain.append(isolator)
         }
-        let eq = AVAudioUnitEQ(numberOfBands: 3)
-        eq.bands[0].filterType = .highPass; eq.bands[0].frequency = 80; eq.bands[0].bypass = false
-        eq.bands[1].filterType = .parametric; eq.bands[1].frequency = 300; eq.bands[1].bandwidth = 1.2; eq.bands[1].gain = -2; eq.bands[1].bypass = false
-        eq.bands[2].filterType = .parametric; eq.bands[2].frequency = 3500; eq.bands[2].bandwidth = 1.5; eq.bands[2].gain = 2; eq.bands[2].bypass = false
+        // 2) Equalização: graves de ruído, zumbido, "caixa" de eco, corpo, clareza e chiado.
+        let eq = AVAudioUnitEQ(numberOfBands: 10)
+        func band(_ i: Int, _ type: AVAudioUnitEQFilterType, _ f: Float, _ bw: Float = 1, _ gain: Float = 0) {
+            eq.bands[i].filterType = type; eq.bands[i].frequency = f; eq.bands[i].bandwidth = bw; eq.bands[i].gain = gain; eq.bands[i].bypass = false
+        }
+        band(0, .highPass, 80)
+        if p.hum { band(1, .parametric, 60, 0.08, -24); band(2, .parametric, 120, 0.08, -18); band(3, .parametric, 180, 0.08, -12) } else { (1...3).forEach { eq.bands[$0].bypass = true } }
+        band(4, .lowShelf, 160, 1, Float(5 * p.warmth))                                      // corpo
+        band(5, .parametric, 380, 1.2, Float(-1.5 - 3.5 * p.echo - 1.5 * p.clarity))          // som de "caixa"/eco
+        band(6, .parametric, 3400, 1.4, Float(6 * p.clarity))                                 // presença
+        band(7, .parametric, 6500, 1.0, Float(-3 * p.hiss))                                   // sibilância/chiado
+        band(8, .highShelf, 9000, 1, Float(1.5 * p.clarity - 9 * p.hiss))                     // ar x chiado
+        band(9, .lowPass, Float(18000 - 7000 * p.hiss))
         chain.append(eq)
-        let compressor = AVAudioUnitEffect(audioComponentDescription: AudioComponentDescription(componentType: kAudioUnitType_Effect, componentSubType: kAudioUnitSubType_DynamicsProcessor,
-                                                                                             componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0))
-        AudioUnitSetParameter(compressor.audioUnit, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, -22, 0)
-        AudioUnitSetParameter(compressor.audioUnit, kDynamicsProcessorParam_HeadRoom, kAudioUnitScope_Global, 0, 6, 0)
-        AudioUnitSetParameter(compressor.audioUnit, kDynamicsProcessorParam_AttackTime, kAudioUnitScope_Global, 0, 0.005, 0)
-        AudioUnitSetParameter(compressor.audioUnit, kDynamicsProcessorParam_ReleaseTime, kAudioUnitScope_Global, 0, 0.12, 0)
-        AudioUnitSetParameter(compressor.audioUnit, kDynamicsProcessorParam_OverallGain, kAudioUnitScope_Global, 0, 3, 0)
-        // Expansor suave: abaixa o ruído de sala nas pausas sem cortar finais de palavra.
-        AudioUnitSetParameter(compressor.audioUnit, kDynamicsProcessorParam_ExpansionThreshold, kAudioUnitScope_Global, 0, -50, 0)
-        AudioUnitSetParameter(compressor.audioUnit, kDynamicsProcessorParam_ExpansionRatio, kAudioUnitScope_Global, 0, 2, 0)
-        chain.append(compressor)
-        let limiter = AVAudioUnitEffect(audioComponentDescription: AudioComponentDescription(componentType: kAudioUnitType_Effect, componentSubType: kAudioUnitSubType_PeakLimiter,
-                                                                                          componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0))
-        chain.append(limiter)
+        // 3) Dinâmica: expansor contra eco/ruído nas pausas + compressor que iguala as falas.
+        let dynamics = effect(kAudioUnitSubType_DynamicsProcessor)
+        AudioUnitSetParameter(dynamics.audioUnit, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, AudioUnitParameterValue(-14 - 16 * p.leveling), 0)
+        AudioUnitSetParameter(dynamics.audioUnit, kDynamicsProcessorParam_HeadRoom, kAudioUnitScope_Global, 0, AudioUnitParameterValue(8 - 4 * p.leveling), 0)
+        AudioUnitSetParameter(dynamics.audioUnit, kDynamicsProcessorParam_AttackTime, kAudioUnitScope_Global, 0, 0.004, 0)
+        AudioUnitSetParameter(dynamics.audioUnit, kDynamicsProcessorParam_ReleaseTime, kAudioUnitScope_Global, 0, AudioUnitParameterValue(0.18 - 0.1 * p.echo), 0)
+        AudioUnitSetParameter(dynamics.audioUnit, kDynamicsProcessorParam_OverallGain, kAudioUnitScope_Global, 0, AudioUnitParameterValue(1 + 5 * p.leveling), 0)
+        AudioUnitSetParameter(dynamics.audioUnit, kDynamicsProcessorParam_ExpansionThreshold, kAudioUnitScope_Global, 0, AudioUnitParameterValue(-55 + 17 * p.echo), 0)
+        AudioUnitSetParameter(dynamics.audioUnit, kDynamicsProcessorParam_ExpansionRatio, kAudioUnitScope_Global, 0, AudioUnitParameterValue(1.5 + 3.5 * p.echo), 0)
+        chain.append(dynamics)
+        chain.append(effect(kAudioUnitSubType_PeakLimiter))
         chain.forEach { engine.attach($0) }
         var previous: AVAudioNode = player
         for node in chain { engine.connect(previous, to: node, format: format); previous = node }
         engine.connect(previous, to: engine.mainMixerNode, format: format)
         try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
         try engine.start()
-        // Converte a entrada para mono 48 kHz e agenda no player.
+        // Só o trecho pedido: posiciona a leitura no início e para no fim.
+        let startFrame = AVAudioFramePosition(((span?.0 ?? 0) * sourceRate).rounded())
+        let endFrame = min(file.length, span.map { AVAudioFramePosition(($0.1 * sourceRate).rounded()) } ?? file.length)
+        file.framePosition = min(startFrame, file.length)
         let converter = AVAudioConverter(from: file.processingFormat, to: format)!
-        let total = AVAudioFramePosition(Double(file.length) * 48000 / file.processingFormat.sampleRate)
+        let total = AVAudioFramePosition(Double(max(0, endFrame - startFrame)) * 48000 / sourceRate)
         var inputDone = false
         func nextBuffer() -> AVAudioPCMBuffer? {
             guard !inputDone else { return nil }
             let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48000)!
             var error: NSError?
             let state = converter.convert(to: out, error: &error) { count, flag in
-                let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: count)!
-                do { try file.read(into: buffer, frameCount: count) } catch { flag.pointee = .endOfStream; return nil }
+                let remaining = endFrame - file.framePosition
+                guard remaining > 0 else { flag.pointee = .endOfStream; return nil }
+                let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: min(count, AVAudioFrameCount(remaining)))!
+                do { try file.read(into: buffer, frameCount: min(count, AVAudioFrameCount(remaining))) } catch { flag.pointee = .endOfStream; return nil }
                 if buffer.frameLength == 0 { flag.pointee = .endOfStream; return nil }
                 flag.pointee = .haveData; return buffer
             }
@@ -104,11 +177,11 @@ enum VoiceStudio {
                 if windowRMS > 0.008 { sum += Double(local); count += Int(buffer.frameLength) }
             }
             rendered += AVAudioFramePosition(buffer.frameLength)
-            let percent = Int(Double(rendered) / Double(total) * 100)
+            let percent = Int(Double(rendered) / Double(max(1, total)) * 100)
             if percent >= lastReport + 5 { lastReport = percent; status("Voz de estúdio: \(percent)%") }
         }
         engine.stop()
-        return count > 0 ? Float((sum / Double(count)).squareRoot()) : targetRMS
+        return count > 0 ? Float((sum / Double(count)).squareRoot()) : p.targetRMS
     }
 
     private static func applyGain(input: URL, output: URL, gain: Float) throws {
@@ -123,6 +196,7 @@ enum VoiceStudio {
                 try source.read(into: buffer)
                 guard buffer.frameLength > 0, let data = buffer.floatChannelData?[0] else { break }
                 for i in 0..<Int(buffer.frameLength) {
+                    // Ganho com teto suave: sobe o volume sem estourar (sem distorção nos picos).
                     let v = data[i] * gain
                     data[i] = abs(v) < 0.8 ? v : (v > 0 ? 1 : -1) * (0.8 + 0.18 * tanh((abs(v) - 0.8) / 0.18))
                 }

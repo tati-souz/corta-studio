@@ -300,7 +300,10 @@ enum MediaEngine {
         guard let video = try await asset.loadTracks(withMediaType: .video).first else { throw StudioError("Vídeo indisponível.") }
         var audio = try await asset.loadTracks(withMediaType: .audio).first
         let voiceAsset = voice.map { AVURLAsset(url: $0) }
-        if let voiceAsset { keepAlive.append(voiceAsset); audio = try await voiceAsset.loadTracks(withMediaType: .audio).first ?? audio }
+        var voiceOffset = 0.0
+        if let voiceAsset, let track = try await voiceAsset.loadTracks(withMediaType: .audio).first {
+            keepAlive.append(voiceAsset); audio = track; voiceOffset = VoiceStudio.offset(of: voiceAsset.url)
+        }
         let composition = AVMutableComposition()
         guard let videoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw StudioError("Não foi possível preparar a edição.") }
         let audioTrack = audio != nil ? composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) : nil
@@ -313,9 +316,12 @@ enum MediaEngine {
             let range = CMTimeRange(start: CMTime(seconds: cut.start, preferredTimescale: 60000), duration: CMTime(seconds: cut.duration, preferredTimescale: 60000))
             try videoTrack.insertTimeRange(range, of: video, at: cursor)
             if let audio, let audioRange, let audioTrack {
-                let available = CMTimeRangeGetIntersection(range, otherRange: audioRange)
+                // A voz tratada pode começar depois do início do vídeo (só o trecho usado): desloca a leitura.
+                let shift = CMTime(seconds: voiceOffset, preferredTimescale: 60000)
+                let wanted = CMTimeRange(start: range.start - shift, duration: range.duration)
+                let available = CMTimeRangeGetIntersection(wanted, otherRange: audioRange)
                 if available.duration.seconds > 0 {
-                    try audioTrack.insertTimeRange(available, of: audio, at: cursor + available.start - range.start)
+                    try audioTrack.insertTimeRange(available, of: audio, at: cursor + available.start - wanted.start)
                 }
             }
             cursor = cursor + range.duration

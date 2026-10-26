@@ -1,4 +1,4 @@
-# Corta Studio — Projeto Ethos (versão 0.15.0)
+# Corta Studio — Projeto Ethos (versão 0.16.0)
 
 Editor de vídeo para Mac (Apple Silicon). Você marca o que quer, clica em **Editar com IA** e o Claude monta a edição. Depois você refina conversando no **chat**, salva o projeto e exporta. A IA usa a **sua assinatura Claude** (não há cobrança por API).
 
@@ -49,7 +49,30 @@ Os modelos ficam no alto da aba **Reels**, numa galeria com prévia desenhada de
    - **O que a IA decide**: cortes inteligentes, redução de pausas, zooms de ênfase, textos de destaque, imagens da biblioteca e gancho na abertura.
    - **Legendas**: dinâmica (palavra a palavra, com a palavra falada em destaque) ou em blocos. Estilos: Ethos (serifada, creme e dourado), Contorno (estilo Reels/TikTok), Clássica e Destaque. Posição inferior ou central.
    - **Imagem**: zoom progressivo, enquadramento que acompanha o rosto (para converter horizontal em vertical) ou vídeo inteiro com fundo desfocado. Também: cor (Natural, Ethos clássico, Cinema, Preto e branco, Vívido suave), transições em fade nas mudanças de assunto, vinheta, fade de abertura e fim, barra de progresso e marca d'água.
-   - **Áudio**: **voz de estúdio**, que isola a voz com o isolador da Apple, tira graves e ruído, comprime e padroniza o volume. Também: música da biblioteca com abaixamento automático durante a fala, e efeitos sonoros sutis (sons discretos sintetizados em zooms, imagens e textos).
+   - **Áudio**: música da biblioteca com abaixamento automático durante a fala, e efeitos sonoros sutis (sons discretos sintetizados em zooms, imagens e textos).
+   - **Voz de estúdio** (painel Áudio, à esquerda):
+     - **Estilos prontos**:
+       - Estúdio (equilíbrio);
+       - Natural (tratamento leve);
+       - Podcast (voz próxima, encorpada e alta);
+       - Sala com eco;
+       - Gravação baixa (sobe volume e clareza sem estourar).
+     - **Volume final**: deixa mais alto e claro o que ficou baixo na gravação.
+     - **Barulho de fundo**: isolamento de voz da Apple contra ventilador, rua, ar-condicionado e pessoas ao fundo.
+     - **Ajustes finos**:
+       - **Eco da sala**;
+       - **Chiado** (ruído agudo);
+       - **Zumbido elétrico** (60 Hz);
+       - **Clareza** (presença das palavras);
+       - **Corpo** (graves);
+       - **Igualar volume** (aproxima falas baixas e altas).
+       - Qualquer ajuste à mão vira "Personalizado".
+     - **O que é tratado:**
+       - Normalmente, só os trechos da edição aberta: num corte de 30 s, leva cerca de 1 segundo.
+       - **Aplicar no áudio do vídeo todo** trata a gravação inteira de uma vez (num vídeo longo leva alguns minutos). Depois, todos os cortes e exportações usam esse áudio pronto.
+     - **Para comparar antes e depois**: desligue e ligue "Voz de estúdio" ouvindo o mesmo trecho.
+     - No chat também funciona: "deixe a voz mais alta e tire o eco", "use o estilo podcast".
+     - Limite: eco muito forte e barulho alto na mesma hora da fala diminuem bastante, mas não somem por completo.
    - **Remover vícios**: "hum", "hã" e "ééé" saem automaticamente. "Tipo", "né" e "então assim" saem quando a IA julga que são muleta. O que foi removido aparece riscado na aba Legendas, com o botão Restaurar.
    - **Desfocar fundo (modo retrato)**: separa você do fundo e desfoca só o fundo.
    - **Correção de olhar (experimental)**: aproxima levemente a íris do centro do olho, quadro a quadro, sem mexer nas pálpebras e sem agir nas piscadas. É uma correção sutil. Não recria o olho como as ferramentas generativas (NVIDIA Broadcast, Descript, Captions). Para desvios grandes, como ler um roteiro longe da câmera, essas ferramentas externas ainda corrigem mais.
